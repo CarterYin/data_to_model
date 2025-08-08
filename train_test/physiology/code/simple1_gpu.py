@@ -151,13 +151,37 @@ def create_models_with_params_gpu():
     print(f"\nGPU加速状态: {'启用' if gpu_available else '未启用'}")
     return models_and_params
 
+def _pearson_corr_for_scorer(y_true, y_pred):
+    """用于交叉验证评估的皮尔逊相关系数打分函数。"""
+    # 处理方差为0或长度过短导致的异常
+    if len(y_true) < 2:
+        return 0.0
+    if np.std(y_true) == 0 or np.std(y_pred) == 0:
+        return 0.0
+    try:
+        return float(stats.pearsonr(y_true, y_pred)[0])
+    except Exception:
+        return 0.0
+
 def hyperparameter_tuning_gpu(X_train, y_train):
-    """Step 3: 使用5折交叉验证进行超参数调优，基于MAE选择最佳模型（GPU加速）"""
+    """Step 3: 使用5折交叉验证进行超参数调优，基于MAE选择最佳模型（GPU加速）
+
+    说明：
+    - 仍以MAE作为模型选择标准；
+    - 同时计算MSE、RMSE、R²、相关系数在5折上的均值，供后续报告使用；
+    - 不再在完整训练集上再次训练最佳模型，直接使用GridSearchCV的best_estimator_。
+    """
     models_and_params = create_models_with_params_gpu()
     best_models = {}
     
-    # 创建MAE评分器（只使用MAE进行模型选择）
-    mae_scorer = make_scorer(mean_absolute_error, greater_is_better=False)
+    # 构建多指标评分（以MAE为选择标准）
+    mae_scorer = 'neg_mean_absolute_error'
+    scoring = {
+        'mae': mae_scorer,
+        'mse': 'neg_mean_squared_error',
+        'r2': 'r2',
+        'corr': make_scorer(_pearson_corr_for_scorer, greater_is_better=True)
+    }
     
     print("开始超参数调优（GPU加速）...")
     for name, model_info in models_and_params.items():
@@ -168,7 +192,8 @@ def hyperparameter_tuning_gpu(X_train, y_train):
             estimator=model_info['model'],
             param_grid=model_info['params'],
             cv=5,  # 5折交叉验证
-            scoring=mae_scorer,
+            scoring=scoring,
+            refit='mae',  # 以MAE作为最终模型选择与refit标准
             n_jobs=1,  # GPU模式下使用单线程
             verbose=0,
             return_train_score=True
@@ -177,12 +202,23 @@ def hyperparameter_tuning_gpu(X_train, y_train):
         # 训练模型
         grid_search.fit(X_train, y_train)
         
-        # 保存最佳模型和详细结果
+        # 保存最佳模型、详细结果及5折均值指标（最佳参数对应）
+        best_idx = grid_search.best_index_
+        cv = grid_search.cv_results_
+        mse_mean = -float(cv['mean_test_mse'][best_idx])
+        cv_mean_results = {
+            'mae': -float(cv['mean_test_mae'][best_idx]),
+            'mse': mse_mean,
+            'rmse': float(np.sqrt(mse_mean)),
+            'r2': float(cv['mean_test_r2'][best_idx]),
+            'correlation': float(cv['mean_test_corr'][best_idx])
+        }
         best_models[name] = {
             'model': grid_search.best_estimator_,
             'best_params': grid_search.best_params_,
             'best_cv_score': -grid_search.best_score_,  # 转换回MAE（正值）
-            'cv_results': grid_search.cv_results_
+            'cv_results': grid_search.cv_results_,
+            'cv_mean_results': cv_mean_results
         }
         
         print(f"  {name} 最佳参数: {grid_search.best_params_}")
@@ -280,7 +316,7 @@ def select_best_model(trained_models, test_results):
 # ============================================================================
 
 def save_results(trained_models, test_results, best_model_name):
-    """保存所有模型的训练集和测试集完整结果"""
+    """保存所有模型的交叉验证均值和测试集完整结果"""
     # 保存详细报告
     with open('hyperparameter_tuning_gpu_report.txt', 'w', encoding='utf-8') as f:
         f.write("年龄预测模型超参数调优报告（GPU加速版本）\n")
@@ -304,20 +340,20 @@ def save_results(trained_models, test_results, best_model_name):
             f.write(f"交叉验证MAE: {model_info['best_cv_score']:.4f}\n")
             f.write("\n" + "=" * 50 + "\n\n")
         
-        f.write("Step 4: 完整训练集训练结果\n")
+        f.write("Step 4: 5折交叉验证均值（最佳参数）\n")
         f.write("-" * 40 + "\n\n")
         
-        # 保存每个模型在训练集上的结果
+        # 保存每个模型在交叉验证中的均值结果（用于替代原训练集结果）
         for name, model_info in trained_models.items():
-            train_results = model_info['train_results']
-            f.write(f"{name} 训练集结果:\n")
+            cv_mean = model_info.get('cv_mean_results', {})
+            f.write(f"{name} 交叉验证均值:\n")
             f.write("-" * 25 + "\n")
             f.write(f"  最佳参数: {model_info['best_params']}\n")
-            f.write(f"  MSE: {train_results['mse']:.4f}\n")
-            f.write(f"  RMSE: {train_results['rmse']:.4f}\n")
-            f.write(f"  MAE: {train_results['mae']:.4f}\n")
-            f.write(f"  R²: {train_results['r2']:.4f}\n")
-            f.write(f"  相关系数: {train_results['correlation']:.4f}\n")
+            f.write(f"  MSE: {cv_mean.get('mse', float('nan')):.4f}\n")
+            f.write(f"  RMSE: {cv_mean.get('rmse', float('nan')):.4f}\n")
+            f.write(f"  MAE: {cv_mean.get('mae', float('nan')):.4f}\n")
+            f.write(f"  R²: {cv_mean.get('r2', float('nan')):.4f}\n")
+            f.write(f"  相关系数: {cv_mean.get('correlation', float('nan')):.4f}\n")
             f.write("\n")
         
         f.write("Step 6: 测试集评估结果\n")
@@ -341,9 +377,9 @@ def save_results(trained_models, test_results, best_model_name):
         f.write(f"选择的最佳模型: {best_model_name}\n")
         f.write(f"选择标准: 测试集最小MAE\n")
         f.write(f"最佳参数: {trained_models[best_model_name]['best_params']}\n")
-        f.write(f"训练集MAE: {trained_models[best_model_name]['train_results']['mae']:.4f}\n")
+        f.write(f"交叉验证MAE: {trained_models[best_model_name]['cv_mean_results']['mae']:.4f}\n")
         f.write(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}\n")
-        f.write(f"训练集R²: {trained_models[best_model_name]['train_results']['r2']:.4f}\n")
+        f.write(f"交叉验证R²: {trained_models[best_model_name]['cv_mean_results']['r2']:.4f}\n")
         f.write(f"测试集R²: {test_results[best_model_name]['r2']:.4f}\n\n")
         
         f.write("模型说明:\n")
@@ -367,13 +403,13 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("模型性能汇总表\n")
         f.write("=" * 80 + "\n\n")
         
-        f.write(f"{'模型名称':<15} {'训练集MAE':<12} {'测试集MAE':<12} {'训练集R²':<12} {'测试集R²':<12} {'训练集RMSE':<12} {'测试集RMSE':<12}\n")
+        f.write(f"{'模型名称':<15} {'CV_MAE':<12} {'测试集MAE':<12} {'CV_R²':<12} {'测试集R²':<12} {'CV_RMSE':<12} {'测试集RMSE':<12}\n")
         f.write("-" * 80 + "\n")
         
         for name in trained_models.keys():
-            train_results = trained_models[name]['train_results']
+            cv_mean = trained_models[name]['cv_mean_results']
             test_info = test_results[name]
-            f.write(f"{name:<15} {train_results['mae']:<12.4f} {test_info['mae']:<12.4f} {train_results['r2']:<12.4f} {test_info['r2']:<12.4f} {train_results['rmse']:<12.4f} {test_info['rmse']:<12.4f}\n")
+            f.write(f"{name:<15} {cv_mean['mae']:<12.4f} {test_info['mae']:<12.4f} {cv_mean['r2']:<12.4f} {test_info['r2']:<12.4f} {cv_mean['rmse']:<12.4f} {test_info['rmse']:<12.4f}\n")
 
 # ============================================================================
 # 主函数
@@ -390,18 +426,18 @@ def main():
         train_features, test_features, train_age, test_age
     )
     
-    # Step 3: 使用5折交叉验证进行超参数调优（GPU加速）
+    # Step 3: 使用5折交叉验证进行超参数调优（GPU加速），以MAE选最佳参数
     best_models = hyperparameter_tuning_gpu(X_train, y_train)
     
-    # Step 4: 在完整训练集上训练每种模型的最优模型
-    trained_models = train_all_optimal_models(X_train, y_train, best_models)
+    # 不再在完整训练集上再次训练，直接使用CV选出的最佳模型进行测试
+    trained_models = best_models
     
     # Step 5: 使用基于训练集的scaler重新缩放测试集
     print("Step 5: 使用训练集scaler重新缩放测试集...")
     # 注意：scaler已经在prepare_data中基于训练集拟合，这里直接使用
     # X_test已经在prepare_data中被正确缩放
     
-    # Step 6: 在测试集上评估所有模型的最优模型
+    # Step 6: 在测试集上评估所有模型（使用CV选出的最佳模型）
     test_results = evaluate_all_models_on_test(X_test, y_test, trained_models)
     
     # 选择最佳模型
