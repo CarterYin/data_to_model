@@ -1,0 +1,11 @@
+*.tsv
+backup/
+catboost_info/
+demand/
+_pycache/
+__pycache__/
+*.txt
+*.log
+*.csv
+*.json
+
