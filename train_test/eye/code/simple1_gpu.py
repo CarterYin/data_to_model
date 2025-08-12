@@ -5,6 +5,7 @@ from sklearn.model_selection import cross_val_score, KFold, GridSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, make_scorer
 from sklearn.preprocessing import StandardScaler
 from sklearn.base import clone
+from sklearn.linear_model import LinearRegression
 import xgboost as xgb
 import lightgbm as lgb
 import catboost as cb
@@ -54,6 +55,55 @@ def prepare_data(train_features, test_features, train_age, test_age):
     X_test = scaler.transform(test_features)
     
     return X_train, X_test, y_train, y_test, scaler
+
+# ============================================================================
+# 校正项计算函数
+# ============================================================================
+
+def calculate_correction_term(CA, BA):
+    """
+    计算校正项 z
+    
+    参数:
+    CA: 日历年龄 (Chronological Age)
+    BA: 生物年龄 (Biological Age)
+    
+    返回:
+    z: 校正项
+    b: 回归系数
+    """
+    # 计算平均日历年龄
+    MeanCA = np.mean(CA)
+    
+    # 使用简单线性回归计算BA对CA的回归系数
+    # BA = b * CA + intercept
+    CA_reshaped = CA.reshape(-1, 1)
+    reg = LinearRegression()
+    reg.fit(CA_reshaped, BA)
+    b = reg.coef_[0]
+    
+    # 计算校正项 z = (CA - MeanCA) * (1 - b)
+    z = (CA - MeanCA) * (1 - b)
+    
+    return z, b
+
+def calculate_corrected_biological_age(CA, BA):
+    """
+    计算校正后的生物年龄 BAc = BA + z
+    
+    参数:
+    CA: 日历年龄
+    BA: 生物年龄
+    
+    返回:
+    BAc: 校正后的生物年龄
+    z: 校正项
+    b: 回归系数
+    """
+    z, b = calculate_correction_term(CA, BA)
+    BAc = BA + z
+    
+    return BAc, z, b
 
 # ============================================================================
 # 模型定义和训练函数
@@ -269,7 +319,7 @@ def train_all_optimal_models(X_train, y_train, best_models):
     return trained_models
 
 def evaluate_all_models_on_test(X_test, y_test, trained_models):
-    """Step 6: 在测试集上评估所有模型的最优模型性能"""
+    """Step 6: 在测试集上评估所有模型的最优模型性能，包括校正后的相关性"""
     print("Step 6: 在测试集上评估所有模型的最优模型性能...")
     test_results = {}
     
@@ -286,6 +336,11 @@ def evaluate_all_models_on_test(X_test, y_test, trained_models):
         test_r2 = r2_score(y_test, y_test_pred)
         test_correlation, _ = stats.pearsonr(y_test, y_test_pred)
         
+        # 计算校正后的生物年龄与日历年龄的相关性
+        # CA = y_test (日历年龄), BA = y_test_pred (预测的生物年龄)
+        BAc, z, b = calculate_corrected_biological_age(y_test, y_test_pred)
+        corrected_correlation, _ = stats.pearsonr(y_test, BAc)
+        
         # 保存测试结果
         test_results[name] = {
             'mse': test_mse,
@@ -293,11 +348,18 @@ def evaluate_all_models_on_test(X_test, y_test, trained_models):
             'mae': test_mae,
             'r2': test_r2,
             'correlation': test_correlation,
-            'predictions': y_test_pred
+            'predictions': y_test_pred,
+            'corrected_predictions': BAc,
+            'correction_term': z,
+            'regression_coefficient': b,
+            'corrected_correlation': corrected_correlation
         }
         
         print(f"  {name} 测试集MAE: {test_mae:.4f}")
         print(f"  {name} 测试集R²: {test_r2:.4f}")
+        print(f"  {name} 原始相关性: {test_correlation:.4f}")
+        print(f"  {name} 校正后相关性: {corrected_correlation:.4f}")
+        print(f"  {name} 回归系数b: {b:.4f}")
     
     return test_results
 
@@ -316,7 +378,7 @@ def select_best_model(trained_models, test_results):
 # ============================================================================
 
 def save_results(trained_models, test_results, best_model_name):
-    """保存所有模型的交叉验证均值和测试集完整结果"""
+    """保存所有模型的交叉验证均值和测试集完整结果，包括校正后的相关性"""
     # 保存详细报告
     with open('hyperparameter_tuning_gpu_report.txt', 'w', encoding='utf-8') as f:
         f.write("年龄预测模型超参数调优报告（GPU加速版本）\n")
@@ -328,6 +390,16 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("LightGBM: device='gpu' (如果GPU可用)\n")
         f.write("CatBoost: task_type='GPU' (如果GPU可用)\n")
         f.write("Random Forest: CPU only (scikit-learn不支持GPU)\n\n")
+        
+        f.write("校正项计算说明:\n")
+        f.write("-" * 25 + "\n")
+        f.write("校正公式: BAc = BA + z\n")
+        f.write("其中: z = (CA - MeanCA) * (1 - b)\n")
+        f.write("CA: 日历年龄 (Chronological Age)\n")
+        f.write("BA: 生物年龄 (Biological Age)\n")
+        f.write("BAc: 校正后的生物年龄\n")
+        f.write("MeanCA: 样本平均日历年龄\n")
+        f.write("b: BA对CA的线性回归系数\n\n")
         
         f.write("Step 3: 5折交叉验证超参数调优结果\n")
         f.write("-" * 50 + "\n\n")
@@ -356,8 +428,8 @@ def save_results(trained_models, test_results, best_model_name):
             f.write(f"  相关系数: {cv_mean.get('correlation', float('nan')):.4f}\n")
             f.write("\n")
         
-        f.write("Step 6: 测试集评估结果\n")
-        f.write("-" * 30 + "\n\n")
+        f.write("Step 6: 测试集评估结果（包含校正后相关性）\n")
+        f.write("-" * 45 + "\n\n")
         
         # 保存每个模型在测试集上的结果
         for name, test_info in test_results.items():
@@ -368,7 +440,10 @@ def save_results(trained_models, test_results, best_model_name):
             f.write(f"  RMSE: {test_info['rmse']:.4f}\n")
             f.write(f"  MAE: {test_info['mae']:.4f}\n")
             f.write(f"  R²: {test_info['r2']:.4f}\n")
-            f.write(f"  相关系数: {test_info['correlation']:.4f}\n")
+            f.write(f"  原始相关系数: {test_info['correlation']:.4f}\n")
+            f.write(f"  校正后相关系数: {test_info['corrected_correlation']:.4f}\n")
+            f.write(f"  回归系数b: {test_info['regression_coefficient']:.4f}\n")
+            f.write(f"  校正项z范围: [{np.min(test_info['correction_term']):.4f}, {np.max(test_info['correction_term']):.4f}]\n")
             f.write("\n")
         
         # 保存最终选择的最佳模型信息
@@ -380,7 +455,9 @@ def save_results(trained_models, test_results, best_model_name):
         f.write(f"交叉验证MAE: {trained_models[best_model_name]['cv_mean_results']['mae']:.4f}\n")
         f.write(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}\n")
         f.write(f"交叉验证R²: {trained_models[best_model_name]['cv_mean_results']['r2']:.4f}\n")
-        f.write(f"测试集R²: {test_results[best_model_name]['r2']:.4f}\n\n")
+        f.write(f"测试集R²: {test_results[best_model_name]['r2']:.4f}\n")
+        f.write(f"原始相关性: {test_results[best_model_name]['correlation']:.4f}\n")
+        f.write(f"校正后相关性: {test_results[best_model_name]['corrected_correlation']:.4f}\n\n")
         
         f.write("模型说明:\n")
         f.write("1. XGBoost - 梯度提升树 (GPU加速)\n")
@@ -393,23 +470,27 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("- RMSE (均方根误差): MSE的平方根\n")
         f.write("- MAE (平均绝对误差): 预测值与真实值差值绝对值的平均值\n")
         f.write("- R² (决定系数): 模型解释方差的比例\n")
-        f.write("- 相关系数: 预测值与真实值的皮尔逊相关系数\n")
+        f.write("- 原始相关系数: 预测的生物年龄与日历年龄的皮尔逊相关系数\n")
+        f.write("- 校正后相关系数: 校正后的生物年龄与日历年龄的皮尔逊相关系数\n")
+        f.write("- 回归系数b: 生物年龄对日历年龄的线性回归系数\n")
+        f.write("- 校正项z: 用于校正生物年龄的项，z = (CA - MeanCA) * (1 - b)\n")
         
         f.write("\n注意: 所有交叉验证结果均为5折交叉验证的平均值\n")
         f.write("GPU加速可以显著提升训练速度，特别是对于大型数据集\n")
+        f.write("校正后的生物年龄(BAc)通过添加校正项z来减少与日历年龄的系统性偏差\n")
         
         # 添加汇总表格
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("模型性能汇总表\n")
-        f.write("=" * 80 + "\n\n")
+        f.write("\n" + "=" * 100 + "\n")
+        f.write("模型性能汇总表（包含校正后相关性）\n")
+        f.write("=" * 100 + "\n\n")
         
-        f.write(f"{'模型名称':<15} {'CV_MAE':<12} {'测试集MAE':<12} {'CV_R²':<12} {'测试集R²':<12} {'CV_RMSE':<12} {'测试集RMSE':<12}\n")
-        f.write("-" * 80 + "\n")
+        f.write(f"{'模型名称':<15} {'CV_MAE':<12} {'测试集MAE':<12} {'CV_R²':<12} {'测试集R²':<12} {'原始相关性':<12} {'校正后相关性':<12} {'回归系数b':<12}\n")
+        f.write("-" * 100 + "\n")
         
         for name in trained_models.keys():
             cv_mean = trained_models[name]['cv_mean_results']
             test_info = test_results[name]
-            f.write(f"{name:<15} {cv_mean['mae']:<12.4f} {test_info['mae']:<12.4f} {cv_mean['r2']:<12.4f} {test_info['r2']:<12.4f} {cv_mean['rmse']:<12.4f} {test_info['rmse']:<12.4f}\n")
+            f.write(f"{name:<15} {cv_mean['mae']:<12.4f} {test_info['mae']:<12.4f} {cv_mean['r2']:<12.4f} {test_info['r2']:<12.4f} {test_info['correlation']:<12.4f} {test_info['corrected_correlation']:<12.4f} {test_info['regression_coefficient']:<12.4f}\n")
 
 # ============================================================================
 # 主函数
@@ -449,7 +530,14 @@ def main():
     print(f"\n训练完成！最佳模型: {best_model_name}")
     print(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}")
     print(f"测试集R²: {test_results[best_model_name]['r2']:.4f}")
+    print(f"原始相关性: {test_results[best_model_name]['correlation']:.4f}")
+    print(f"校正后相关性: {test_results[best_model_name]['corrected_correlation']:.4f}")
+    print(f"回归系数b: {test_results[best_model_name]['regression_coefficient']:.4f}")
     print("详细结果已保存到 hyperparameter_tuning_gpu_report.txt")
+    print("\n校正项计算说明:")
+    print("BAc = BA + z, 其中 z = (CA - MeanCA) * (1 - b)")
+    print("CA: 日历年龄, BA: 生物年龄, BAc: 校正后的生物年龄")
+    print("MeanCA: 样本平均日历年龄, b: BA对CA的线性回归系数")
 
 if __name__ == "__main__":
     main()
