@@ -20,12 +20,12 @@ warnings.filterwarnings('ignore')
 def load_data():
     """加载训练和测试数据"""
     # 加载特征数据
-    train_features = pd.read_csv('../train_set_ren.tsv', sep='\t')
-    test_features = pd.read_csv('../test_set_ren.tsv', sep='\t')
+    train_features = pd.read_csv('../train_ren.tsv', sep='\t')
+    test_features = pd.read_csv('../test_ren.tsv', sep='\t')
     
     # 加载年龄标签
-    train_age = pd.read_csv('../train_set_age.tsv', sep='\t')
-    test_age = pd.read_csv('../test_set_age.tsv', sep='\t')
+    train_age = pd.read_csv('../train_age.tsv', sep='\t')
+    test_age = pd.read_csv('../test_age.tsv', sep='\t')
     
     return train_features, test_features, train_age, test_age
 

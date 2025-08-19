@@ -89,6 +89,14 @@ def main():
         {
             'name': '全量模型',
             'path': os.path.join(base_dir, 'all', 'code', 'simple1_gpu.py')
+        },
+        {
+            'name': '人体模型',
+            'path': os.path.join(base_dir, 'ren', 'code', 'simple1_gpu.py')
+        },
+        {
+            'name': '全量模型',
+            'path': os.path.join(base_dir, 'newall', 'code', 'simple1_gpu.py')
         }
     ]
     
