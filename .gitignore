@@ -1,6 +1,5 @@
 *.tsv
 *.original_backup
-backup/
 catboost_info/
 demand/
 _pycache/
