@@ -1,5 +1,6 @@
 *.tsv
 *.original_backup
+*.ICD10_backup
 catboost_info/
 demand/
 _pycache/
