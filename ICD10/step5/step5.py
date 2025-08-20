@@ -4,8 +4,7 @@
 将健康对照组数据分为训练集和测试集
 功能：
 1. 删除方差为0的列（所有值都相同的列）
-2. 删除缺失率超过50%的字段
-3. 将数据分为训练集和测试集，比例为4:1
+2. 将数据分为训练集和测试集，比例为4:1
 """
 
 import pandas as pd
@@ -69,44 +68,6 @@ def remove_zero_variance_columns(df):
     
     return df_cleaned, zero_variance_columns
 
-def remove_high_missing_columns(df, missing_threshold=0.5):
-    """
-    删除缺失率超过指定阈值的列
-    
-    Parameters:
-    df (DataFrame): 输入数据框
-    missing_threshold (float): 缺失率阈值，默认0.5（即50%）
-    
-    Returns:
-    tuple: (清理后的数据框, 被删除的列名列表)
-    """
-    
-    print(f"正在检查缺失率超过 {missing_threshold:.1%} 的列...")
-    
-    high_missing_columns = []
-    total_rows = len(df)
-    
-    for col in df.columns:
-        if col == 'samples':  # 跳过样本ID列
-            continue
-            
-        missing_count = df[col].isnull().sum()
-        missing_rate = missing_count / total_rows
-        
-        if missing_rate > missing_threshold:
-            high_missing_columns.append(col)
-            print(f"  发现高缺失率列: {col} (缺失率: {missing_rate:.2%}, 缺失值: {missing_count}/{total_rows})")
-    
-    if high_missing_columns:
-        print(f"发现 {len(high_missing_columns)} 个高缺失率列，将被删除")
-        df_cleaned = df.drop(columns=high_missing_columns)
-        print(f"删除后剩余 {len(df_cleaned.columns)} 列")
-    else:
-        print(f"没有发现缺失率超过 {missing_threshold:.1%} 的列")
-        df_cleaned = df.copy()
-    
-    return df_cleaned, high_missing_columns
-
 def split_train_test_data(input_file, train_file, test_file, train_ratio=0.8, random_state=42):
     """
     将数据集分为训练集和测试集
@@ -132,17 +93,11 @@ def split_train_test_data(input_file, train_file, test_file, train_ratio=0.8, ra
     # 删除方差为0的列
     print(f"\n步骤1: 删除方差为0的列")
     print("-" * 30)
-    df_cleaned, removed_variance_columns = remove_zero_variance_columns(df)
-    df = df_cleaned
-    
-    # 删除缺失率超过50%的列
-    print(f"\n步骤2: 删除缺失率超过50%的列")
-    print("-" * 30)
-    df_cleaned, removed_missing_columns = remove_high_missing_columns(df)
+    df_cleaned, removed_columns = remove_zero_variance_columns(df)
     df = df_cleaned
     
     # 显示数据集基本信息
-    print(f"\n步骤3: 数据集分割")
+    print(f"\n步骤2: 数据集分割")
     print("-" * 30)
     print(f"清理后数据集信息:")
     print(f"总样本数: {len(df)}")
@@ -203,25 +158,13 @@ def split_train_test_data(input_file, train_file, test_file, train_ratio=0.8, ra
         
         # 添加零方差列删除信息
         f.write(f"零方差列删除:\n")
-        f.write(f"  删除的列数: {len(removed_variance_columns)}\n")
-        if removed_variance_columns:
+        f.write(f"  删除的列数: {len(removed_columns)}\n")
+        if removed_columns:
             f.write(f"  被删除的列:\n")
-            for col in removed_variance_columns:
+            for col in removed_columns:
                 f.write(f"    - {col}\n")
         else:
             f.write(f"  没有发现零方差列\n")
-        f.write(f"\n")
-        
-        # 添加高缺失率列删除信息
-        f.write(f"高缺失率列删除:\n")
-        f.write(f"  删除的列数: {len(removed_missing_columns)}\n")
-        f.write(f"  缺失率阈值: 50%\n")
-        if removed_missing_columns:
-            f.write(f"  被删除的列:\n")
-            for col in removed_missing_columns:
-                f.write(f"    - {col}\n")
-        else:
-            f.write(f"  没有发现缺失率超过50%的列\n")
         f.write(f"\n")
         f.write(f"分割参数:\n")
         f.write(f"  训练集比例: {train_ratio:.1%}\n")
@@ -271,7 +214,7 @@ def split_train_test_data(input_file, train_file, test_file, train_ratio=0.8, ra
 def main():
     """主函数"""
     # 设置文件路径
-    input_file = "preprocessing2.tsv"
+    input_file = "preprocessing4.tsv"
     train_file = "train_set.tsv"
     test_file = "test_set.tsv"
     
