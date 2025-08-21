@@ -219,7 +219,7 @@ def hyperparameter_tuning_gpu(X_train, y_train):
     说明：
     - 仍以MAE作为模型选择标准；
     - 同时计算MSE、RMSE、R²、相关系数在5折上的均值，供后续报告使用；
-    - 不再在完整训练集上再次训练最佳模型，直接使用GridSearchCV的best_estimator_。
+    - 直接使用GridSearchCV的best_estimator_进行后续评估，无需重新训练。
     """
     models_and_params = create_models_with_params_gpu()
     best_models = {}
@@ -276,54 +276,14 @@ def hyperparameter_tuning_gpu(X_train, y_train):
     
     return best_models
 
-def train_all_optimal_models(X_train, y_train, best_models):
-    """Step 4: 在完整训练集上训练每种模型的最优模型"""
-    print("Step 4: 在完整训练集上训练每种模型的最优模型...")
-    trained_models = {}
-    
-    for name, model_info in best_models.items():
-        print(f"正在训练 {name} 的最优模型...")
-        
-        # 克隆最佳模型并在完整训练集上训练
-        optimal_model = clone(model_info['model'])
-        optimal_model.fit(X_train, y_train)
-        
-        # 在训练集上进行预测
-        y_train_pred = optimal_model.predict(X_train)
-        
-        # 计算训练集上的评估指标
-        train_mse = mean_squared_error(y_train, y_train_pred)
-        train_rmse = np.sqrt(train_mse)
-        train_mae = mean_absolute_error(y_train, y_train_pred)
-        train_r2 = r2_score(y_train, y_train_pred)
-        train_correlation, _ = stats.pearsonr(y_train, y_train_pred)
-        
-        # 保存训练结果
-        trained_models[name] = {
-            'model': optimal_model,
-            'best_params': model_info['best_params'],
-            'best_cv_score': model_info['best_cv_score'],
-            'train_results': {
-                'mse': train_mse,
-                'rmse': train_rmse,
-                'mae': train_mae,
-                'r2': train_r2,
-                'correlation': train_correlation,
-                'predictions': y_train_pred
-            }
-        }
-        
-        print(f"  {name} 训练集MAE: {train_mae:.4f}")
-        print(f"  {name} 训练集R²: {train_r2:.4f}")
-    
-    return trained_models
 
-def evaluate_all_models_on_test(X_test, y_test, trained_models):
-    """Step 6: 在测试集上评估所有模型的最优模型性能，包括校正后的相关性"""
-    print("Step 6: 在测试集上评估所有模型的最优模型性能...")
+
+def evaluate_all_models_on_test(X_test, y_test, best_models):
+    """Step 4: 在测试集上评估所有模型的最优模型性能，包括校正后的相关性"""
+    print("Step 4: 在测试集上评估所有模型的最优模型性能...")
     test_results = {}
     
-    for name, model_info in trained_models.items():
+    for name, model_info in best_models.items():
         print(f"正在评估 {name} 在测试集上的性能...")
         
         # 在测试集上进行预测
@@ -363,21 +323,21 @@ def evaluate_all_models_on_test(X_test, y_test, trained_models):
     
     return test_results
 
-def select_best_model(trained_models, test_results):
+def select_best_model(best_models, test_results):
     """选择测试集MAE最小的最佳模型"""
     best_model_name = min(test_results.items(), key=lambda x: x[1]['mae'])[0]
-    best_model = trained_models[best_model_name]['model']
+    best_model = best_models[best_model_name]['model']
     
     print(f"\n最佳模型: {best_model_name}")
     print(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}")
     
-    return best_model_name, best_model, trained_models, test_results
+    return best_model_name, best_model, best_models, test_results
 
 # ============================================================================
 # 结果保存函数
 # ============================================================================
 
-def save_results(trained_models, test_results, best_model_name):
+def save_results(best_models, test_results, best_model_name):
     """保存所有模型的交叉验证均值和测试集完整结果，包括校正后的相关性"""
     # 保存详细报告
     with open('hyperparameter_tuning_gpu_report.txt', 'w', encoding='utf-8') as f:
@@ -390,6 +350,11 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("LightGBM: device='gpu' (如果GPU可用)\n")
         f.write("CatBoost: task_type='GPU' (如果GPU可用)\n")
         f.write("Random Forest: CPU only (scikit-learn不支持GPU)\n\n")
+        
+        f.write("优化说明:\n")
+        f.write("-" * 15 + "\n")
+        f.write("直接使用超参数优化时获得的最佳模型进行测试集评估\n")
+        f.write("省去了在全量训练数据上重新训练的步骤\n\n")
         
         f.write("校正项计算说明:\n")
         f.write("-" * 25 + "\n")
@@ -405,18 +370,18 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("-" * 50 + "\n\n")
         
         # 保存每个模型的超参数调优结果
-        for name, model_info in trained_models.items():
+        for name, model_info in best_models.items():
             f.write(f"{name} 超参数调优结果:\n")
             f.write("=" * 40 + "\n")
             f.write(f"最佳参数: {model_info['best_params']}\n")
             f.write(f"交叉验证MAE: {model_info['best_cv_score']:.4f}\n")
             f.write("\n" + "=" * 50 + "\n\n")
         
-        f.write("Step 4: 5折交叉验证均值（最佳参数）\n")
-        f.write("-" * 40 + "\n\n")
+        f.write("5折交叉验证均值（最佳参数）\n")
+        f.write("-" * 35 + "\n\n")
         
-        # 保存每个模型在交叉验证中的均值结果（用于替代原训练集结果）
-        for name, model_info in trained_models.items():
+        # 保存每个模型在交叉验证中的均值结果
+        for name, model_info in best_models.items():
             cv_mean = model_info.get('cv_mean_results', {})
             f.write(f"{name} 交叉验证均值:\n")
             f.write("-" * 25 + "\n")
@@ -428,14 +393,14 @@ def save_results(trained_models, test_results, best_model_name):
             f.write(f"  相关系数: {cv_mean.get('correlation', float('nan')):.4f}\n")
             f.write("\n")
         
-        f.write("Step 6: 测试集评估结果（包含校正后相关性）\n")
+        f.write("Step 4: 测试集评估结果（包含校正后相关性）\n")
         f.write("-" * 45 + "\n\n")
         
         # 保存每个模型在测试集上的结果
         for name, test_info in test_results.items():
             f.write(f"{name} 测试集结果:\n")
             f.write("-" * 25 + "\n")
-            f.write(f"  最佳参数: {trained_models[name]['best_params']}\n")
+            f.write(f"  最佳参数: {best_models[name]['best_params']}\n")
             f.write(f"  MSE: {test_info['mse']:.4f}\n")
             f.write(f"  RMSE: {test_info['rmse']:.4f}\n")
             f.write(f"  MAE: {test_info['mae']:.4f}\n")
@@ -451,10 +416,10 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("-" * 25 + "\n")
         f.write(f"选择的最佳模型: {best_model_name}\n")
         f.write(f"选择标准: 测试集最小MAE\n")
-        f.write(f"最佳参数: {trained_models[best_model_name]['best_params']}\n")
-        f.write(f"交叉验证MAE: {trained_models[best_model_name]['cv_mean_results']['mae']:.4f}\n")
+        f.write(f"最佳参数: {best_models[best_model_name]['best_params']}\n")
+        f.write(f"交叉验证MAE: {best_models[best_model_name]['cv_mean_results']['mae']:.4f}\n")
         f.write(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}\n")
-        f.write(f"交叉验证R²: {trained_models[best_model_name]['cv_mean_results']['r2']:.4f}\n")
+        f.write(f"交叉验证R²: {best_models[best_model_name]['cv_mean_results']['r2']:.4f}\n")
         f.write(f"测试集R²: {test_results[best_model_name]['r2']:.4f}\n")
         f.write(f"原始相关性: {test_results[best_model_name]['correlation']:.4f}\n")
         f.write(f"校正后相关性: {test_results[best_model_name]['corrected_correlation']:.4f}\n\n")
@@ -478,6 +443,7 @@ def save_results(trained_models, test_results, best_model_name):
         f.write("\n注意: 所有交叉验证结果均为5折交叉验证的平均值\n")
         f.write("GPU加速可以显著提升训练速度，特别是对于大型数据集\n")
         f.write("校正后的生物年龄(BAc)通过添加校正项z来减少与日历年龄的系统性偏差\n")
+        f.write("直接使用GridSearchCV的best_estimator_，省去了重新训练的步骤\n")
         
         # 添加汇总表格
         f.write("\n" + "=" * 100 + "\n")
@@ -487,8 +453,8 @@ def save_results(trained_models, test_results, best_model_name):
         f.write(f"{'模型名称':<15} {'CV_MAE':<12} {'测试集MAE':<12} {'CV_R²':<12} {'测试集R²':<12} {'原始相关性':<12} {'校正后相关性':<12} {'回归系数b':<12}\n")
         f.write("-" * 100 + "\n")
         
-        for name in trained_models.keys():
-            cv_mean = trained_models[name]['cv_mean_results']
+        for name in best_models.keys():
+            cv_mean = best_models[name]['cv_mean_results']
             test_info = test_results[name]
             f.write(f"{name:<15} {cv_mean['mae']:<12.4f} {test_info['mae']:<12.4f} {cv_mean['r2']:<12.4f} {test_info['r2']:<12.4f} {test_info['correlation']:<12.4f} {test_info['corrected_correlation']:<12.4f} {test_info['regression_coefficient']:<12.4f}\n")
 
@@ -497,8 +463,8 @@ def save_results(trained_models, test_results, best_model_name):
 # ============================================================================
 
 def main():
-    """主函数 - 执行完整的年龄预测分析流程（GPU加速版本）"""
-    print("开始年龄预测模型训练和评估（GPU加速版本）...")
+    """主函数 - 执行完整的年龄预测分析流程（GPU加速版本，优化版）"""
+    print("开始年龄预测模型训练和评估（GPU加速版本，优化版）...")
     
     # Step 1 & 2: 数据加载和预处理
     print("Step 1-2: 数据加载和预处理...")
@@ -508,24 +474,17 @@ def main():
     )
     
     # Step 3: 使用5折交叉验证进行超参数调优（GPU加速），以MAE选最佳参数
+    # 直接使用GridSearchCV的best_estimator_，无需重新训练
     best_models = hyperparameter_tuning_gpu(X_train, y_train)
     
-    # 不再在完整训练集上再次训练，直接使用CV选出的最佳模型进行测试
-    trained_models = best_models
-    
-    # Step 5: 使用基于训练集的scaler重新缩放测试集
-    print("Step 5: 使用训练集scaler重新缩放测试集...")
-    # 注意：scaler已经在prepare_data中基于训练集拟合，这里直接使用
-    # X_test已经在prepare_data中被正确缩放
-    
-    # Step 6: 在测试集上评估所有模型（使用CV选出的最佳模型）
-    test_results = evaluate_all_models_on_test(X_test, y_test, trained_models)
+    # Step 4: 在测试集上评估所有模型（直接使用CV选出的最佳模型）
+    test_results = evaluate_all_models_on_test(X_test, y_test, best_models)
     
     # 选择最佳模型
-    best_model_name, best_model, trained_models, test_results = select_best_model(trained_models, test_results)
+    best_model_name, best_model, best_models, test_results = select_best_model(best_models, test_results)
     
     # 保存结果
-    save_results(trained_models, test_results, best_model_name)
+    save_results(best_models, test_results, best_model_name)
     
     print(f"\n训练完成！最佳模型: {best_model_name}")
     print(f"测试集MAE: {test_results[best_model_name]['mae']:.4f}")
@@ -534,6 +493,10 @@ def main():
     print(f"校正后相关性: {test_results[best_model_name]['corrected_correlation']:.4f}")
     print(f"回归系数b: {test_results[best_model_name]['regression_coefficient']:.4f}")
     print("详细结果已保存到 hyperparameter_tuning_gpu_report.txt")
+    print("\n优化说明:")
+    print("- 直接使用超参数优化时的最佳模型进行测试")
+    print("- 省去了在全量训练数据上重新训练的步骤")
+    print("- 提高了训练效率，同时保持了模型性能")
     print("\n校正项计算说明:")
     print("BAc = BA + z, 其中 z = (CA - MeanCA) * (1 - b)")
     print("CA: 日历年龄, BA: 生物年龄, BAc: 校正后的生物年龄")

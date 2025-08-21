@@ -3,9 +3,10 @@
 """
 合并的数据预处理脚本
 功能：
-1. 填充特定字段的缺失值（bmi_x10等）
-2. 选择指定的字段
-3. 最终缺失值填充
+1. 删除训练集中缺失率超过50%的字段
+2. 填充特定字段的缺失值（bmi_x10等）
+3. 选择指定的字段
+4. 最终缺失值填充
 输入：train_set.tsv, test_set.tsv
 输出：train.tsv, test.tsv
 """
@@ -15,7 +16,68 @@ import numpy as np
 import os
 from collections import Counter
 
+def get_high_missing_fields(train_df, missing_threshold=50.0):
+    """
+    获取训练集中缺失率超过阈值的字段列表
+    
+    Parameters:
+    train_df (DataFrame): 训练集数据框
+    missing_threshold (float): 缺失率阈值，默认50%
+    
+    Returns:
+    list: 缺失率超过阈值的字段列表
+    """
+    
+    print(f"正在分析训练集缺失率超过{missing_threshold}%的字段...")
+    
+    # 计算每个字段的缺失率
+    missing_rates = []
+    field_names = []
+    
+    for column in train_df.columns:
+        missing_count = train_df[column].isna().sum()
+        missing_rate = missing_count / len(train_df) * 100
+        missing_rates.append(missing_rate)
+        field_names.append(column)
+    
+    # 创建缺失率数据框
+    missing_df = pd.DataFrame({
+        'Field': field_names,
+        'Missing_Rate': missing_rates
+    })
+    
+    # 找出缺失率超过阈值的字段
+    high_missing_fields = missing_df[missing_df['Missing_Rate'] > missing_threshold]['Field'].tolist()
+    
+    print(f"发现 {len(high_missing_fields)} 个字段缺失率超过{missing_threshold}%")
+    print(f"这些字段将被删除")
+    
+    return high_missing_fields
 
+def remove_high_missing_fields(train_df, test_df, fields_to_remove):
+    """
+    从训练集和测试集中删除指定字段
+    
+    Parameters:
+    train_df (DataFrame): 训练集数据框
+    test_df (DataFrame): 测试集数据框
+    fields_to_remove (list): 要删除的字段列表
+    
+    Returns:
+    tuple: (清理后的训练集, 清理后的测试集)
+    """
+    
+    print(f"\n正在删除高缺失率字段...")
+    
+    # 删除指定字段
+    train_df_cleaned = train_df.drop(columns=fields_to_remove, errors='ignore')
+    test_df_cleaned = test_df.drop(columns=fields_to_remove, errors='ignore')
+    
+    print(f"训练集: 从{len(train_df.columns)}列减少到{len(train_df_cleaned.columns)}列")
+    print(f"测试集: 从{len(test_df.columns)}列减少到{len(test_df_cleaned.columns)}列")
+    print(f"删除了 {len(train_df.columns) - len(train_df_cleaned.columns)} 个字段")
+    
+    return train_df_cleaned, test_df_cleaned
 
 def fill_bmi_x10(df):
     """
@@ -466,8 +528,18 @@ def main():
         print(f"读取文件时出错: {e}")
         return
     
-    # 2. 特定字段缺失值填充
-    print("\n步骤2: 特定字段缺失值填充")
+    # 2. 删除高缺失率字段
+    print("\n步骤2: 删除高缺失率字段")
+    print("-" * 30)
+    high_missing_fields = get_high_missing_fields(train_df, missing_threshold=50.0)
+    
+    if high_missing_fields:
+        train_df, test_df = remove_high_missing_fields(train_df, test_df, high_missing_fields)
+    else:
+        print("没有找到缺失率超过50%的字段，跳过删除步骤")
+    
+    # 3. 特定字段缺失值填充
+    print("\n步骤3: 特定字段缺失值填充")
     print("-" * 30)
     print("处理训练集...")
     train_df = apply_specific_field_filling(train_df)
@@ -475,8 +547,8 @@ def main():
     print("\n处理测试集...")
     test_df = apply_specific_field_filling(test_df)
     
-    # 3. 选择指定字段
-    print("\n步骤3: 选择指定字段")
+    # 4. 选择指定字段
+    print("\n步骤4: 选择指定字段")
     print("-" * 30)
     print("处理训练集...")
     train_df = select_specific_fields(train_df)
@@ -484,8 +556,8 @@ def main():
     print("\n处理测试集...")
     test_df = select_specific_fields(test_df)
     
-    # 4. 最终缺失值填充
-    print("\n步骤4: 最终缺失值填充")
+    # 5. 最终缺失值填充
+    print("\n步骤5: 最终缺失值填充")
     print("-" * 30)
     print("处理训练集...")
     train_df = fill_final_missing_values(train_df)
@@ -493,14 +565,14 @@ def main():
     print("\n处理测试集...")
     test_df = fill_final_missing_values(test_df)
     
-    # 5. 验证最终结果
-    print("\n步骤5: 验证最终结果")
+    # 6. 验证最终结果
+    print("\n步骤6: 验证最终结果")
     print("-" * 30)
     verify_final_result(train_df, "训练集")
     verify_final_result(test_df, "测试集")
     
-    # 6. 保存最终结果
-    print("\n步骤6: 保存最终结果")
+    # 7. 保存最终结果
+    print("\n步骤7: 保存最终结果")
     print("-" * 30)
     print(f"正在保存训练集到: {train_output_file}")
     train_df.to_csv(train_output_file, sep='\t', index=False)
